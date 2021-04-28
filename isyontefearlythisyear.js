@@ -66,7 +66,7 @@ function dataCallback(data) {
 	}
 
 	rawData = rawData.sort((a, b) => {
-		return a.month === b.month ? d3.ascending(a.day, b.day) : d3.ascending(a.month, b.month);
+		return a.month == b.month ? d3.ascending(a.day, b.day) : d3.ascending(a.month, b.month);
 	});
 
 	aggregateData();
@@ -87,10 +87,6 @@ function update(transition) {
 	eventsEnter.append('p').attr('class', 'date lead text-muted');
 	const svg = eventsEnter.append('svg');
 	const g = svg.append('g').attr('transform', 'translate(' + margin.left + ', ' + margin.top + ')');
-	const mainG = g.append('g').attr('class', 'main');
-	// YearLine.append("text"); yearLine.append("text"); yearLine.append("text");
-	// overlayG.append("g").attr("class", "overbar");
-	const xAxisG = g.append('g').attr('class', 'xAxis');
 	const belowAxis = g.append('g').attr('class', 'belowAxis');
 	const freqLine = belowAxis.append('g').attr('class', 'freqLine');
 	freqLine.append('polygon')
@@ -215,7 +211,7 @@ function update(transition) {
 			.attr('dy', 13);
 	});
 
-	d3.select('#big-question').text(`Is ${upcomingPoint.event} ${earlyLateDirection} this year?`);
+	d3.select('#big-question').text('Is ' + upcomingPoint.event + ' ' + earlyLateDirection + ' ' + ' this year?');
 	d3.select('#big-answer').text(makeBigAnswer());
 	d3.select('#answer-description').html(makeAnswerDescription());
 }
@@ -228,7 +224,7 @@ function onHover(d, thisEvent) {
 	placeFreqLine(fl, d);
 
 	thisEvent.select('.overlays').selectAll('.dateOverlay').classed('touching', dd => {
-		return dd.date.valueOf() === d.date.valueOf();
+		return dd.date.valueOf() == d.date.valueOf();
 	});
 }
 
@@ -287,11 +283,12 @@ function placeYearLine(s, d) {
 	s.attr('transform', 'translate(' + xTime.get(s.node())(d.date) + ')');
 
 	const dateFlagText = [];
-	const thisEventOnDate = rawData.filter(dd => dd.date.valueOf() === d.date.valueOf() && dd.event == d.event);
+	// If(d.date.valueOf() == upcomingData.get(d.event).date.valueOf())
+	const thisEventOnDate = rawData.filter(dd => dd.date.valueOf() == d.date.valueOf() && dd.event == d.event);
 	const thisYearIndex = thisEventOnDate.findIndex(dd => dd.year - upcomingData.get(d.event).year >= 0);
 	if (thisYearIndex === -1) { // All in the past
 		dateFlagText.push('Last time: ' + thisEventOnDate[thisEventOnDate.length - 1].year);
-	} else if (thisEventOnDate[thisYearIndex].year === upcomingData.get(d.event).year) { // This year
+	} else if (thisEventOnDate[thisYearIndex].year == upcomingData.get(d.event).year) { // This year
 		dateFlagText.push('This year');
 		try {
 			dateFlagText.push('Last time: ' + thisEventOnDate[thisYearIndex - 1].year);
@@ -314,7 +311,7 @@ function placeYearLine(s, d) {
 	text.exit().remove();
 	text = text.enter().append('text').merge(text)
 		.text(t => t)
-		.classed('thisYear', t => t === 'This year')
+		.classed('thisYear', t => t == 'This year')
 		.attr('y', (t, i) => height + margin.bottom + belowThresholdsOffest + belowFreqRectOffset + 10 + i * 15)
 		.attr('dy', -4);
 
@@ -336,7 +333,7 @@ function placeYearLine(s, d) {
 }
 
 function makeBigAnswer(asBool) {
-	const answer = earlyLateThresholds(upcomingPoint.cumFreq) === earlyLateDirection;
+	const answer = earlyLateThresholds(upcomingPoint.cumFreq) == earlyLateDirection;
 	if (asBool) {
 		return answer;
 	}
@@ -351,7 +348,7 @@ function makeBigAnswer(asBool) {
 function makeAnswerDescription() {
 	let outString = '';
 
-	if (makeBigAnswer(true) === false) {
+	if (makeBigAnswer(true) == false) {
 		const ontimeness = formatOntimeness(earlyLateThresholds(upcomingPoint.cumFreq));
 		outString = 'It’s ' + (ontimeness === 'on time' ? 'right ' : ' ') + ontimeness + ' this year. ';
 	}
@@ -380,7 +377,7 @@ function size() {
 	const containerContainer = d3.select(container.node().parentNode);
 	outerWidth = Number.parseFloat(containerContainer.style('width')) -
         Number.parseFloat(containerContainer.style('padding-left')) -
-        Number.parseFloat(containerContainer.style('padding-right')),
+        Number.parseFloat(containerContainer.style('padding-right'));
 	// OuterHeight = 140;
 	height = 100;
 	outerHeight = height + margin.top + margin.bottom + belowAxisHeight;
@@ -427,8 +424,8 @@ function sortByUpcoming(date) {
 }
 
 function aggregateData(startYear, endYear) {
-	startYear = startYear === undefined ? d3.min(rawData, d => d.year) : startYear;
-	endYear = endYear === undefined ? d3.max(rawData, d => d.year) : endYear;
+	startYear = startYear == undefined ? d3.min(rawData, d => d.year) : startYear;
+	endYear = endYear == undefined ? d3.max(rawData, d => d.year) : endYear;
 
 	const totalYears = endYear - startYear + 1;
 
@@ -454,7 +451,7 @@ function aggregateData(startYear, endYear) {
 }
 
 function makeThresholdData(data) {
-	const thresholdPairs = d3.pairs(data).filter(dd => dd[0].ontimeness !== dd[1].ontimeness);
+	const thresholdPairs = d3.pairs(data).filter(dd => dd[0].ontimeness != dd[1].ontimeness);
 	const thresholdData = [];
 	thresholdData.push({
 		range: earlyLateThresholds.range()[0],
