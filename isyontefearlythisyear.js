@@ -1,5 +1,6 @@
 import * as d3 from "d3";
 import "bootstrap/dist/css/bootstrap.min.css";
+import data from './static/data.json';
 
 const earlyLateDirection = location.hostname.includes("late") ? "late" : "early";
 const yontefSpelling = location.hostname.includes("yontef") ? "yontef" : "yom tov";
@@ -10,7 +11,9 @@ let outerHeight;
 let width;
 let height;
 
-const margin = {top: 12, right: 16, bottom: 20, left: 16};
+const margin = {
+    top: 12, right: 16, bottom: 20, left: 16,
+};
 
 const belowAxisHeight = 100;
 const freqRectHeight = 30;
@@ -25,17 +28,33 @@ const earlyLateThresholds = d3.scaleThreshold()
     .domain([1 / 3, 2 / 3])
     .range(["early", "ontime", "late"]);
 
-const x = d3.local();
-const xTime = d3.local();
+// Define percentFormat earlier
+const percentFormat = d3.format(".1%");
+
+// Helper: traverse up until xTime scale is found
+function getXTimeScale(node) {
+    let n = node;
+    while (n && !xTime.get(n)) {
+        n = n.parentNode;
+    }
+
+    return n ? xTime.get(n) : undefined;
+}
+
+// Replace d3.local() with WeakMap
+const x = new WeakMap();
+const xTime = new WeakMap();
 const histY = d3.scaleLinear();
 
-d3.json("data.json").then(dataCallback);
-
+// Declare module-level variables before calling dataCallback
 let aggData;
 let rawData;
 let upcomingData;
 let upcomingPoint;
 let currentDate;
+
+// Now call the dataCallback with the imported data
+dataCallback(data);
 
 function dataCallback(data) {
     const eventMap = {
@@ -74,9 +93,17 @@ function dataCallback(data) {
 }
 
 function update(transition) {
+    if (!upcomingPoint) {
+        // No upcoming event found, clear UI or skip rendering
+        d3.select("#big-question").text("No upcoming event found.");
+        d3.select("#big-answer").text("");
+        d3.select("#answer-description").text("");
+        return;
+    }
+
     const duration = transition ? 400 : 0;
 
-    let events = container.selectAll(".event").data(upcomingData.entries(), d => d.key);
+    let events = container.selectAll(".event").data(Array.from(upcomingData.entries()), d => d[0]);
     events.exit().remove();
     const eventsEnter = events.enter().append("div").attr("class", "event");
 
@@ -101,28 +128,46 @@ function update(transition) {
     }
 
     eventsEnter.each(function (d) {
-        const dates = aggData.get(d.key).values().map(dd => dd.date);
-        const dateRange = makeDateRange(dates[0], dates[dates.length - 1], true);
+        const dates = Array.from(aggData.get(d[0]).values()).map(dd => dd.date);
+        const dateRange = makeDateRange(dates[0], dates.at(-1), true);
+
+        // Ensure xTime is set for all nodes
         x.set(this, d3.scaleBand()
             .domain(dateRange)
             .paddingInner(0.3));
 
         xTime.set(this, d3.scaleUtc()
-            .domain([dateRange[0], dateRange[dateRange.length - 1]]));
+            .domain([dateRange[0], dateRange.at(-1)]));
     });
 
     events = eventsEnter.merge(events);
     events.order();
-    events.select("h2.label").text(d => d.key + " " + d.value.year + "/" + d.value.hebYear
-        + ((d.value.actualDate - currentDate) > 0 ? " will be " : " is ")
-        + formatOntimeness(earlyLateThresholds(aggData.get(d.key).get(d.value.date).cumFreq)));
-    events.select("p.date").text(d => d3.utcFormat("%B %e")(upcomingData.get(d.key).actualDate));
+    events.select("h2.label").text(d => {
+        // Find the point in aggData using valueOf lookup
+        const dateValue = d[1].date.valueOf();
+        const eventData = aggData.get(d[0]);
+        let point;
+
+        // Find matching date by value
+        for (const [dateKey, p] of eventData.entries()) {
+            if (dateKey.valueOf() === dateValue) {
+                point = p;
+                break;
+            }
+        }
+
+        return d[0] + " " + d[1].year + "/" + d[1].hebYear
+            + ((d[1].actualDate - currentDate) > 0 ? " will be " : " is ")
+            + formatOntimeness(earlyLateThresholds(point.cumFreq));
+    });
+    events.select("p.date").text(d => d3.utcFormat("%B %e")(upcomingData.get(d[0]).actualDate));
 
     events.each(function (d) {
         const thisEvent = d3.select(this);
 
         const tx = x.get(this).range([0, width]);
-        const txTime = xTime.get(this).range([tx.range()[0] + tx.bandwidth() / 2, (tx.range()[1] - tx.bandwidth()) / 2]);
+        // Adjust txTime range: right bound now properly computed instead of dividing by 2.
+        const txTime = xTime.get(this).range([tx.range()[0] + tx.bandwidth() / 2, tx.range()[1] - tx.bandwidth() / 2]);
 
         const xAxis = d3.axisBottom()
             .tickSizeOuter(0)
@@ -131,43 +176,68 @@ function update(transition) {
         thisEvent.select(".xAxis")
             .call(xAxis.scale(txTime).ticks(width <= 768 ? d3.utcWeek.every(1) : d3.utcDay.every(1)));
 
-        const stacked = d3.stack().keys(["nonLeapCount", "leapCount"]).value((dd, k) => dd.value[k])(aggData.get(d.key).entries());
+        // Correct the value accessor for d3.stack
+        const stacked = d3.stack().keys(["nonLeapCount", "leapCount"]).value((dd, k) => dd[1][k])(Array.from(aggData.get(d[0]).entries()));
         let bars = thisEvent.select(".main").selectAll("g.bars").data(stacked, dd => dd.key);
         bars.exit().remove();
         bars = bars.enter().append("g")
             .attr("class", "bars")
             .classed("leap", dd => dd.key === "leapCount")
             .merge(bars);
-        let bar = bars.selectAll("rect.bar").data(dd => dd, dd => dd.data.key);
+        let bar = bars.selectAll("rect.bar").data(dd => dd, dd => dd.data[0]); // Use Date object (dd.data[0]) as key
         bar.exit().remove();
         bar = bar.enter().append("rect").attr("class", "bar")
-            .attr("x", dd => tx(dd.data.key))
+            .attr("x", dd => tx(dd.data[0])) // Use Date object (dd.data[0]) for x scale
             .attr("y", () => histY(0))
             .attr("width", tx.bandwidth())
             .attr("height", 0)
             .merge(bar);
         bar.transition().duration(duration)
-            .attr("x", dd => tx(dd.data.key))
+            .attr("x", dd => tx(dd.data[0])) // Use Date object (dd.data[0]) for x scale
             .attr("y", dd => histY(dd[1]))
             .attr("width", tx.bandwidth())
             .attr("height", dd => histY(dd[0]) - histY(dd[1]));
 
         const eventDrag = d3.drag()
-            .on("start drag", () => {
-                let thisDate = txTime.invert(d3.event.x);
-                thisDate = new Date(Date.UTC(thisDate.getUTCFullYear(), thisDate.getUTCMonth(), thisDate.getUTCDate()));
-                const thisPoint = aggData.get(d.key).get(thisDate);
-                onHover(thisPoint, thisEvent);
+            .on("start drag", event => {
+                const thisDate = txTime.invert(event.x);
+                // Find the closest date in the scale domain
+                const domainDates = tx.domain();
+                let closestDate = domainDates[0];
+                let closestDiff = Math.abs(domainDates[0] - thisDate);
+
+                for (let i = 1; i < domainDates.length; i++) {
+                    const diff = Math.abs(domainDates[i] - thisDate);
+                    if (diff < closestDiff) {
+                        closestDiff = diff;
+                        closestDate = domainDates[i];
+                    }
+                }
+
+                // Find the point in aggData using valueOf lookup
+                const dateValue = closestDate.valueOf();
+                const eventData = aggData.get(d[0]);
+                let thisPoint;
+                for (const [dateKey, p] of eventData.entries()) {
+                    if (dateKey.valueOf() === dateValue) {
+                        thisPoint = p;
+                        break;
+                    }
+                }
+
+                if (thisPoint) {
+                    onHover(thisPoint, thisEvent);
+                }
             })
             .on("end", () => onUp(thisEvent));
 
-        let overlays = thisEvent.select("g.overlays").selectAll("g.dateOverlay").data(aggData.get(d.key).values(), dd => dd.date);
+        let overlays = thisEvent.select("g.overlays").selectAll("g.dateOverlay").data(Array.from(aggData.get(d[0]).values()), dd => dd.date);
         overlays.exit().remove();
         const overlaysEnter = overlays.enter().append("g").attr("class", "dateOverlay");
         overlaysEnter.append("rect").attr("class", "hover");
         overlaysEnter.append("text").attr("class", "overbar");
         overlaysEnter
-            .on("mouseover", dd => onHover(dd, thisEvent))
+            .on("mouseover", (event, dd) => onHover(dd, thisEvent))
             .on("mouseout", () => onUp(thisEvent));
         thisEvent.select("g.overlays").call(eventDrag);
         overlays = overlays.merge(overlaysEnter);
@@ -184,10 +254,9 @@ function update(transition) {
             })
             .attr("dy", -3);
 
-        // ThisEvent.select("g.overlays").select(".yearLine").call(placeYearLine, aggData.get(d.key).get(d.value.date));
         onUp(thisEvent);
 
-        const thresholdData = makeThresholdData(aggData.get(d.key).values());
+        const thresholdData = makeThresholdData(Array.from(aggData.get(d[0]).values()));
         thisEvent.select("g.belowAxis").attr("transform", `translate(0, ${(height + margin.bottom + 2)})`);
         let thresholdLabels = thisEvent.select("g.belowAxis").selectAll("g.thresholdLabel").data(thresholdData, dd => dd);
         thresholdLabels.exit().remove();
@@ -224,80 +293,94 @@ function onHover(d, thisEvent) {
 
 function onUp(thisEvent) {
     const d = thisEvent.datum();
-    const dd = aggData.get(d.key).get(d.value.date);
-    onHover(dd, thisEvent);
+    // Find the point in aggData using valueOf lookup
+    const dateValue = d[1].date.valueOf();
+    const eventData = aggData.get(d[0]);
+    let point;
+
+    // Find matching date by value
+    for (const [dateKey, p] of eventData.entries()) {
+        if (dateKey.valueOf() === dateValue) {
+            point = p;
+            break;
+        }
+    }
+
+    onHover(point, thisEvent);
     thisEvent.select(".overlays").selectAll(".dateOverlay").classed("touching", false);
 }
 
 function placeFreqLine(s, d) {
+    // Use the helper to get the scale from node or its parent
+    const scale = getXTimeScale(s.node());
+    if (!scale) {
+        console.error("Scale not found for node in placeFreqLine:", s.node());
+        return; // Exit if the scale is not set
+    }
+
     s.attr("transform", `translate(0,${belowThresholdsOffest})`);
     s.select("rect")
         .attr("y", 0)
         .attr("height", freqRectHeight);
     s.select("text").attr("dy", 20);
 
-    const txTime = xTime.get(s.node());
-
     if (d.cumFreq < 0.5) {
         s.select("rect")
-            .attr("x", txTime(d.date) + freqArrowWidth)
-            .attr("width", txTime.range()[1] - txTime(d.date) - freqArrowWidth);
-        s.select("polygon").attr("transform", `translate(${(txTime(d.date) + freqArrowWidth)}) scale(-1 1)`);
+            .attr("x", scale(d.date) + freqArrowWidth)
+            .attr("width", scale.range()[1] - scale(d.date) - freqArrowWidth);
+        s.select("polygon").attr("transform", `translate(${(scale(d.date) + freqArrowWidth)}) scale(-1 1)`);
         s.select("text")
             .text(d3.utcFormat("%B %e")(d.date) + ": earlier than " + percentFormat(1 - d.cumFreq))
-            .text(function () {
-                if (this.getBBox().width > s.select("rect").attr("width") - 6) {
-                    return d3.utcFormat("%m/%d")(d.date) + ": before " + percentFormat(1 - d.cumFreq);
-                }
-
-                return d3.select(this).text();
-            })
-            .attr("x", txTime(d.date) + freqArrowWidth + 3);
+            .attr("x", scale(d.date) + freqArrowWidth + 3);
     } else {
         s.select("rect")
-            .attr("x", txTime.range()[0])
-            .attr("width", txTime(d.date) - txTime.range()[0] - freqArrowWidth);
-        s.select("polygon").attr("transform", "translate(" + (txTime(d.date) - freqArrowWidth) + ")");
+            .attr("x", scale.range()[0])
+            .attr("width", scale(d.date) - scale.range()[0] - freqArrowWidth);
+        s.select("polygon").attr("transform", "translate(" + (scale(d.date) - freqArrowWidth) + ")");
         s.select("text")
             .text(d3.utcFormat("%B %e")(d.date) + ": later than " + percentFormat(d.cumFreq - d.freq))
-            .text(function () {
-                if (this.getBBox().width > s.select("rect").attr("width") - 6) {
-                    return d3.utcFormat("%m/%d")(d.date) + ": after " + percentFormat(d.cumFreq - d.freq);
-                }
-
-                return d3.select(this).text();
-            })
             .attr("x", function () {
-                return txTime(d.date) - this.getBBox().width - 3 - freqArrowWidth;
+                const bbox = (typeof this.getBBox === "function") ? this.getBBox() : {width: 0};
+                return scale(d.date) - bbox.width - 3 - freqArrowWidth;
             });
     }
 }
 
 function placeYearLine(s, d) {
-    s.attr("transform", "translate(" + xTime.get(s.node())(d.date) + ")");
+    const scale = getXTimeScale(s.node());
+    if (!scale) {
+        console.error("Scale not found for node in placeYearLine:", s.node());
+        return; // Exit if the scale is not set
+    }
+
+    s.attr("transform", "translate(" + scale(d.date) + ")");
 
     const dateFlagText = [];
     const thisEventOnDate = rawData.filter(dd => dd.date.valueOf() === d.date.valueOf() && dd.event === d.event);
-    const thisYearIndex = thisEventOnDate.findIndex(dd => dd.year - upcomingData.get(d.event).year >= 0);
-    if (thisYearIndex === -1) { // All in the past
-        dateFlagText.push("Last time: " + thisEventOnDate[thisEventOnDate.length - 1].year);
-    } else if (thisEventOnDate[thisYearIndex].year === upcomingData.get(d.event).year) { // This year
+    const currentUpcoming = upcomingData.get(d.event);
+    const currentUpcomingYear = currentUpcoming ? currentUpcoming.year : null;
+
+    const thisYearIndex = currentUpcomingYear === null ? -1 : thisEventOnDate.findIndex(dd => dd.year - currentUpcomingYear >= 0);
+
+    if (thisYearIndex === -1) {
+        if (thisEventOnDate.length > 0) {
+            dateFlagText.push("Last time: " + thisEventOnDate.at(-1).year);
+        }
+    } else if (thisEventOnDate[thisYearIndex].year === currentUpcomingYear) {
         dateFlagText.push("This year");
-        try {
+        if (thisYearIndex > 0) {
             dateFlagText.push("Last time: " + thisEventOnDate[thisYearIndex - 1].year);
-        } catch {}
+        }
 
-        try {
+        if (thisYearIndex < thisEventOnDate.length - 1) {
             dateFlagText.push("Next time: " + thisEventOnDate[thisYearIndex + 1].year);
-        } catch {}
+        }
     } else {
-        try {
+        if (thisYearIndex > 0) {
             dateFlagText.push("Last time: " + thisEventOnDate[thisYearIndex - 1].year);
-        } catch {}
+        }
 
-        try {
-            dateFlagText.push("Next time: " + thisEventOnDate[thisYearIndex].year);
-        } catch {}
+        dateFlagText.push("Next time: " + thisEventOnDate[thisYearIndex].year);
     }
 
     let text = s.selectAll("text").data(dateFlagText, t => t);
@@ -305,24 +388,16 @@ function placeYearLine(s, d) {
     text = text.enter().append("text").merge(text)
         .text(t => t)
         .classed("thisYear", t => t === "This year")
-        .attr("y", (_, i) => (height + margin.bottom + belowThresholdsOffest + belowFreqRectOffset + 10 + i) * 15)
+        .attr("y", (_, i) => (height + margin.bottom + belowThresholdsOffest + belowFreqRectOffset + 10 + i * 15))
         .attr("dy", -4);
 
-    const widest = d3.max(text.nodes().map(n => n.getBBox().width));
-
     text.attr("dx", function () {
-        const padding = 3;
-        const pos = xTime.get(this)(d.date);
-        if ((pos + widest + 2) * padding > width) {
-            return -this.getBBox().width - padding;
-        }
-
-        return padding;
+        return -this.getBBox().width / 2;
     });
 
     s.select("line")
         .attr("y1", height)
-        .attr("y2", (height + margin.bottom + belowThresholdsOffest + belowFreqRectOffset + 10 + (dateFlagText.length - 1)) * 13);
+        .attr("y2", height + margin.bottom + belowThresholdsOffest + belowFreqRectOffset + 10 + (dateFlagText.length - 1) * 15);
 }
 
 function makeBigAnswer(asBool) {
@@ -364,8 +439,6 @@ function makeAnswerDescription() {
     return outString;
 }
 
-const percentFormat = d3.format(".1%");
-
 function size() {
     const containerContainer = d3.select(container.node().parentNode);
     const outerWidth = Number.parseFloat(containerContainer.style("width"))
@@ -403,17 +476,47 @@ function sortByUpcoming(date) {
         Chanukah: 9,
     };
 
-    currentDate = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())); // Convert to naive
-    upcomingData = d3.nest()
-        .key(d => d.event)
-        .rollup(d => d[0]) // .sort((a, b) => d3.ascending(a.actualDate, b.actualDate))
-        .map(rawData
-            .filter(d => (d.actualDate - currentDate) / 1000 / 3600 / 24 > -eventHoldover[d.event])
-            .sort((a, b) => d3.ascending(a.actualDate, b.actualDate)),
-        );
+    currentDate = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
 
-    upcomingPoint = aggData.get(upcomingData.values()[0].event).get(upcomingData.values()[0].date);
-    upcomingPoint.actualDate = upcomingData.values()[0].actualDate;
+    const filtered = rawData.filter(d => {
+        const diff = (d.actualDate - currentDate) / 1000 / 3600 / 24;
+        return diff > -eventHoldover[d.event];
+    });
+
+    upcomingData = new Map(
+        Array.from(
+            d3.group(
+                filtered.sort((a, b) => d3.ascending(a.actualDate, b.actualDate)),
+                d => d.event,
+            ),
+            ([key, values]) => [key, values[0]],
+        ),
+    );
+
+    const firstUpcoming = Array.from(upcomingData.values())[0];
+    if (firstUpcoming) {
+        const dateValue = firstUpcoming.date.valueOf();
+        let foundPoint;
+
+        const eventData = aggData.get(firstUpcoming.event);
+        if (eventData) {
+            for (const [dateKey, point] of eventData.entries()) {
+                if (dateKey.valueOf() === dateValue) {
+                    foundPoint = point;
+                    break;
+                }
+            }
+        }
+
+        upcomingPoint = foundPoint;
+        if (upcomingPoint) {
+            upcomingPoint.actualDate = firstUpcoming.actualDate;
+        } else {
+            console.log("No matching point found for:", firstUpcoming.event, new Date(dateValue).toISOString());
+        }
+    } else {
+        upcomingPoint = undefined;
+    }
 }
 
 function aggregateData(startYear, endYear) {
@@ -422,23 +525,42 @@ function aggregateData(startYear, endYear) {
 
     const totalYears = endYear - startYear + 1;
 
-    aggData = d3.nest()
-        .key(d => d.event)
-        .key(d => d.date)
-
-        .rollup(d => ({event: d[0].event, date: d[0].date, count: d.length, leapCount: d.filter(dd => dd.leap).length, nonLeapCount: d.filter(dd => !dd.leap).length, freq: d.length / totalYears}))
-        .map(rawData.filter(d => d.year >= startYear && d.year <= endYear));
+    aggData = new Map(
+        Array.from(
+            d3.group(
+                rawData.filter(d => d.year >= startYear && d.year <= endYear),
+                d => d.event,
+                d => d.date.valueOf(),
+            ),
+            ([event, dateMap]) => [
+                event,
+                new Map(
+                    Array.from(dateMap, ([date, array]) => [
+                        new Date(Number(date)),
+                        {
+                            event: array[0].event,
+                            date: array[0].date,
+                            count: array.length,
+                            leapCount: array.filter(dd => dd.leap).length,
+                            nonLeapCount: array.filter(dd => !dd.leap).length,
+                            freq: array.length / totalYears,
+                        },
+                    ]),
+                ),
+            ],
+        ),
+    );
 
     for (const ex of aggData.values()) {
         let cumFreq = 0;
-        for (const d of ex.values()) {
+        for (const d of Array.from(ex.values())) {
             cumFreq += d.freq;
             d.cumFreq = cumFreq;
             d.ontimeness = earlyLateThresholds(cumFreq);
         }
     }
 
-    histY.domain([0, d3.max(aggData.values().map(d => d3.max(d.values(), dd => dd.count)))]); // Renormalize
+    histY.domain([0, d3.max(Array.from(aggData.values()).map(d => d3.max(Array.from(d.values()), dd => dd.count)))]); // Renormalize
 }
 
 function makeThresholdData(data) {
@@ -461,8 +583,8 @@ function makeThresholdData(data) {
 
     thresholdData.push({
         range: earlyLateThresholds.range()[earlyLateThresholds.range().length - 1],
-        start: thresholdPairs[thresholdPairs.length - 1][1].date,
-        end: data[data.length - 1].date,
+        start: thresholdPairs.at(-1)[1].date,
+        end: data.at(-1).date,
     });
     return thresholdData;
 }
